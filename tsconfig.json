@@ -6,9 +6,10 @@
     "strict": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
-    "noEmit": true,
-    "rootDir": "."
+    "outDir": "dist",
+    "rootDir": ".",
+    "noEmit": false
   },
-  "include": ["**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": ["index.ts", "lib/**/*.ts", "routes/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
 }

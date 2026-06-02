@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { hasValidAppointmentOfType } from "../lib/guards.js";
 import { readStore, withStore } from "../lib/store.js";
 import type {
   Appointment,
@@ -36,6 +37,17 @@ appointmentRoutes.post("/appointments", async (c) => {
     const user = section.users.find((u) => u.id === body.userId);
     if (!user?.active) return null;
 
+    section.appointments ??= [];
+    if (
+      hasValidAppointmentOfType(
+        section.appointments,
+        body.userId,
+        body.type,
+      )
+    ) {
+      return "duplicate-type";
+    }
+
     const now = new Date().toISOString();
     const created: Appointment = {
       id: crypto.randomUUID(),
@@ -51,6 +63,14 @@ appointmentRoutes.post("/appointments", async (c) => {
     return created;
   });
 
+  if (appointment === "duplicate-type") {
+    return c.json(
+      {
+        error: `User already has an active ${body.type} appointment`,
+      },
+      409,
+    );
+  }
   if (!appointment) return c.json({ error: "User not found or inactive" }, 400);
   return c.json(appointment, 201);
 });
@@ -62,6 +82,12 @@ appointmentRoutes.patch("/appointments/:id", async (c) => {
   if (body.type && body.type !== "service" && body.type !== "sale") {
     return badRequest(c, "type must be service or sale");
   }
+  if (
+    body.scheduledAt !== undefined &&
+    body.scheduledAt < new Date().toISOString()
+  ) {
+    return badRequest(c, "scheduledAt must be in the future");
+  }
 
   const appointment = await withStore((store) => {
     const section = store.automobile;
@@ -70,17 +96,45 @@ appointmentRoutes.patch("/appointments/:id", async (c) => {
     if (index === -1) return undefined;
 
     const current = section.appointments[index];
+    const type = body.type ?? current.type;
+    const scheduledAt = body.scheduledAt ?? current.scheduledAt;
+
     const updated: Appointment = {
       ...current,
-      type: body.type ?? current.type,
-      scheduledAt: body.scheduledAt ?? current.scheduledAt,
+      type,
+      scheduledAt,
       notes: body.notes !== undefined ? body.notes?.trim() : current.notes,
       updatedAt: new Date().toISOString(),
     };
+
+    if (
+      scheduledAt >= new Date().toISOString() &&
+      hasValidAppointmentOfType(
+        section.appointments,
+        current.userId,
+        type,
+        id,
+      )
+    ) {
+      return { conflict: type };
+    }
+
     section.appointments[index] = updated;
     return updated;
   });
 
+  if (
+    appointment &&
+    typeof appointment === "object" &&
+    "conflict" in appointment
+  ) {
+    return c.json(
+      {
+        error: `User already has an active ${appointment.conflict} appointment`,
+      },
+      409,
+    );
+  }
   if (!appointment) return notFound(c);
   return c.json(appointment);
 });

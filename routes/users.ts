@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { isPhoneTaken, normalizePhone } from "../lib/guards.js";
 import { readStore, withStore } from "../lib/store.js";
 import type {
   CreateUserBody,
@@ -15,8 +16,6 @@ const badRequest = (
   message: string,
 ) => c.json({ error: message }, 400);
 
-const normalizePhone = (phone: string) => phone.trim();
-
 export const createUserRoutes = (
   prefix: Prefix,
   options: { allowDeactivate?: boolean } = {},
@@ -30,10 +29,11 @@ export const createUserRoutes = (
     }
 
     const phone = normalizePhone(body.phone);
+    if (!phone) return badRequest(c, "phone must contain digits");
 
     const user = await withStore((store) => {
       const section = store[prefix];
-      if (section.users.some((u) => u.phone === phone)) {
+      if (isPhoneTaken(store, phone)) {
         return null;
       }
       const now = new Date().toISOString();
@@ -66,8 +66,12 @@ export const createUserRoutes = (
       const phone =
         body.phone !== undefined ? normalizePhone(body.phone) : current.phone;
 
+      if (body.phone !== undefined && !phone) {
+        return "invalid-phone";
+      }
+
       if (body.phone !== undefined && phone !== current.phone) {
-        if (section.users.some((u) => u.phone === phone)) {
+        if (isPhoneTaken(store, phone, id)) {
           return null;
         }
       }
@@ -82,6 +86,9 @@ export const createUserRoutes = (
       return updated;
     });
 
+    if (user === "invalid-phone") {
+      return badRequest(c, "phone must contain digits");
+    }
     if (user === null) return c.json({ error: "Phone already in use" }, 409);
     if (!user) return notFound(c);
     return c.json(user);

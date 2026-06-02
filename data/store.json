@@ -19,6 +19,15 @@
         "notes": "tiene un rudio medio feo al frenar",
         "createdAt": "2026-06-02T22:24:49.647Z",
         "updatedAt": "2026-06-02T22:24:49.647Z"
+      },
+      {
+        "id": "381e5806-043b-47ed-bd80-3690291c535b",
+        "userId": "83326ce6-5dd9-4918-90f1-32e9fc73a70d",
+        "type": "sale",
+        "scheduledAt": "2026-06-03T15:00:00",
+        "notes": "elmuy chingon quiere uno de lujo, oilooo",
+        "createdAt": "2026-06-02T23:37:23.085Z",
+        "updatedAt": "2026-06-02T23:37:23.085Z"
       }
     ]
   },

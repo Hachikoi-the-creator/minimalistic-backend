@@ -36,7 +36,8 @@ export type CreateUserBody = {
 export type UpdateUserBody = Partial<CreateUserBody>;
 
 export type CreateAppointmentBody = {
-  userId: string;
+  userId?: string;
+  phone?: string;
   type: AppointmentType;
   scheduledAt: string;
   notes?: string;

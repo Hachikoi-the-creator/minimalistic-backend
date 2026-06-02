@@ -2,6 +2,15 @@ import type { Appointment, AppointmentType, Prefix, Store } from "./types.js";
 
 export const normalizePhone = (phone: string) => phone.replace(/\D/g, "");
 
+export const normalizeAppointmentType = (
+  type: string | undefined,
+): AppointmentType | undefined => {
+  const value = type?.trim().toLowerCase();
+  if (value === "service" || value === "services") return "service";
+  if (value === "sale" || value === "sales") return "sale";
+  return undefined;
+};
+
 export const isPhoneTaken = (
   store: Store,
   phone: string,

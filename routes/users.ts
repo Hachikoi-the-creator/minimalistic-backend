@@ -122,6 +122,21 @@ export const createUserRoutes = (
     return c.json(store[prefix].users);
   });
 
+  app.get("/users/search", async (c) => {
+    const raw = c.req.query("phone");
+    if (!raw?.trim()) {
+      return badRequest(c, "phone query parameter is required");
+    }
+
+    const phone = normalizePhone(raw);
+    if (!phone) return badRequest(c, "phone must contain digits");
+
+    const store = await readStore();
+    const user = store[prefix].users.find((u) => u.phone === phone);
+    if (!user) return notFound(c);
+    return c.json(user);
+  });
+
   app.get("/users/:id", async (c) => {
     const store = await readStore();
     const user = store[prefix].users.find((u) => u.id === c.req.param("id"));

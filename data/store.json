@@ -1,0 +1,31 @@
+{
+  "automobile": {
+    "users": [
+      {
+        "id": "83326ce6-5dd9-4918-90f1-32e9fc73a70d",
+        "name": "test user",
+        "phone": "1234567890",
+        "active": true,
+        "createdAt": "2026-06-02T22:21:10.822Z",
+        "updatedAt": "2026-06-02T22:21:10.822Z"
+      }
+    ],
+    "appointments": [
+      {
+        "id": "0238f447-50a9-4e03-b3d3-f501e4686521",
+        "userId": "83326ce6-5dd9-4918-90f1-32e9fc73a70d",
+        "type": "service",
+        "scheduledAt": "2026-06-03T15:00:00",
+        "notes": "tiene un rudio medio feo al frenar",
+        "createdAt": "2026-06-02T22:24:49.647Z",
+        "updatedAt": "2026-06-02T22:24:49.647Z"
+      }
+    ]
+  },
+  "inmobiliary": {
+    "users": []
+  },
+  "internal-tool": {
+    "users": []
+  }
+}

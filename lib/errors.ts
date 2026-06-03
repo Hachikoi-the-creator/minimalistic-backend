@@ -6,6 +6,8 @@ export type ApiErrorBody = {
   code: string;
 };
 
+type ApiErrorStatus = 400 | 404 | 409;
+
 const prefixLabel: Record<Prefix, string> = {
   automobile: "automobile",
   inmobiliary: "inmobiliary",
@@ -14,7 +16,7 @@ const prefixLabel: Record<Prefix, string> = {
 
 export const apiError = (
   c: Context,
-  status: number,
+  status: ApiErrorStatus,
   code: string,
   message: string,
 ) => c.json({ error: message, code } satisfies ApiErrorBody, status);

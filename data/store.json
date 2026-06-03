@@ -8,6 +8,14 @@
         "active": true,
         "createdAt": "2026-06-02T22:21:10.822Z",
         "updatedAt": "2026-06-02T22:21:10.822Z"
+      },
+      {
+        "id": "3d7423da-0fd0-427f-a43c-3cb48a16803e",
+        "name": "test user",
+        "phone": "989898167672",
+        "active": true,
+        "createdAt": "2026-06-03T04:45:50.588Z",
+        "updatedAt": "2026-06-03T04:45:50.588Z"
       }
     ],
     "appointments": [

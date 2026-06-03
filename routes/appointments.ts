@@ -1,6 +1,8 @@
 import { Hono } from "hono";
+import { appointmentErrors } from "../lib/errors.js";
 import {
-  hasValidAppointmentOfType,
+  findValidAppointmentForUser,
+  getActiveAppointmentBlock,
   normalizeAppointmentType,
   normalizePhone,
 } from "../lib/guards.js";
@@ -34,13 +36,20 @@ const resolveUser = (
   return undefined;
 };
 
-const notFound = (c: { json: (body: unknown, status: number) => Response }) =>
-  c.json({ error: "Not found" }, 404);
-
-const badRequest = (
-  c: { json: (body: unknown, status: number) => Response },
-  message: string,
-) => c.json({ error: message }, 400);
+const lookupUser = (
+  users: User[],
+  body: CreateAppointmentBody,
+): User | undefined => {
+  const resolved = resolveUser(users, body);
+  if (
+    resolved === "invalid-phone" ||
+    resolved === "mismatch" ||
+    resolved === undefined
+  ) {
+    return undefined;
+  }
+  return resolved;
+};
 
 export const appointmentRoutes = new Hono();
 
@@ -53,18 +62,16 @@ appointmentRoutes.post("/appointments", async (c) => {
   if (!body.scheduledAt) missing.push("scheduledAt");
   if (!body.notes) missing.push("notes");
   if (missing.length > 0) {
-    return badRequest(c, `Missing required fields: ${missing.join(", ")}`);
+    return appointmentErrors.missingFields(c, missing);
   }
 
   const type = normalizeAppointmentType(body.type);
-  if (!type) {
-    return badRequest(c, 'type must be "service" or "sale" (sales is also accepted)');
-  }
+  if (!type) return appointmentErrors.invalidType(c);
   if (body.scheduledAt! < new Date().toISOString()) {
-    return badRequest(c, "scheduledAt must be in the future");
+    return appointmentErrors.scheduledAtPast(c);
   }
   if (body.notes!.trim().length === 0) {
-    return badRequest(c, "notes must be a non-empty string");
+    return appointmentErrors.notesEmpty(c);
   }
 
   const appointment = await withStore((store) => {
@@ -73,17 +80,30 @@ appointmentRoutes.post("/appointments", async (c) => {
 
     if (resolved === "invalid-phone") return "invalid-phone";
     if (resolved === "mismatch") return "mismatch";
-    if (!resolved?.active) return null;
+
+    const user = lookupUser(section.users, body);
+    if (!user) return "not-found";
+    if (!user.active) return "inactive";
 
     section.appointments ??= [];
-    if (hasValidAppointmentOfType(section.appointments, resolved.id, type)) {
-      return "duplicate-type";
+    const block = getActiveAppointmentBlock(
+      section.appointments,
+      user.id,
+      type,
+    );
+    if (block === "same-type") return "same-type";
+    if (block === "other-type") {
+      const existing = findValidAppointmentForUser(
+        section.appointments,
+        user.id,
+      )!;
+      return { kind: "other-type", existingType: existing.type };
     }
 
     const now = new Date().toISOString();
     const created: Appointment = {
       id: crypto.randomUUID(),
-      userId: resolved.id,
+      userId: user.id,
       type,
       scheduledAt: body.scheduledAt!,
       notes: body.notes!.trim(),
@@ -95,87 +115,98 @@ appointmentRoutes.post("/appointments", async (c) => {
   });
 
   if (appointment === "invalid-phone") {
-    return badRequest(c, "phone must contain digits");
+    return appointmentErrors.invalidPhone(c);
   }
   if (appointment === "mismatch") {
-    return badRequest(c, "userId does not match phone");
+    return appointmentErrors.userIdPhoneMismatch(c);
+  }
+  if (appointment === "not-found") {
+    return appointmentErrors.userNotFound(c);
+  }
+  if (appointment === "inactive") {
+    return appointmentErrors.userInactive(c);
+  }
+  if (appointment === "same-type") {
+    return appointmentErrors.activeSameType(c, type);
+  }
+  if (
+    appointment &&
+    typeof appointment === "object" &&
+    "kind" in appointment
+  ) {
+    return appointmentErrors.activeOtherType(c, appointment.existingType);
   }
 
-  if (appointment === "duplicate-type") {
-    return c.json(
-      {
-        error: `User already has an active ${type} appointment`,
-      },
-      409,
-    );
-  }
-  if (!appointment) return c.json({ error: "User not found or inactive" }, 400);
-  return c.json(appointment, 201);
+  return c.json(appointment as Appointment, 201);
 });
 
-appointmentRoutes.patch("/appointments/:id", async (c) => {
-  const id = c.req.param("id");
+appointmentRoutes.patch("/appointments/user/:userId", async (c) => {
+  const userId = c.req.param("userId");
   const body = (await c.req.json()) as UpdateAppointmentBody;
 
   const type = body.type ? normalizeAppointmentType(body.type) : undefined;
-  if (body.type && !type) {
-    return badRequest(c, 'type must be "service" or "sale" (sales is also accepted)');
-  }
+  if (body.type && !type) return appointmentErrors.invalidType(c);
   if (
     body.scheduledAt !== undefined &&
     body.scheduledAt < new Date().toISOString()
   ) {
-    return badRequest(c, "scheduledAt must be in the future");
+    return appointmentErrors.scheduledAtPast(c);
+  }
+  if (body.notes !== undefined && body.notes.trim().length === 0) {
+    return appointmentErrors.notesEmpty(c);
   }
 
   const appointment = await withStore((store) => {
     const section = store.automobile;
     section.appointments ??= [];
-    const index = section.appointments.findIndex((a) => a.id === id);
-    if (index === -1) return undefined;
 
-    const current = section.appointments[index];
-    const resolvedType = type ?? current.type;
-    const scheduledAt = body.scheduledAt ?? current.scheduledAt;
+    const current = findValidAppointmentForUser(section.appointments, userId);
+    if (!current) return undefined;
 
+    const index = section.appointments.findIndex((a) => a.id === current.id);
     const updated: Appointment = {
       ...current,
-      type: resolvedType,
-      scheduledAt,
-      notes: body.notes !== undefined ? body.notes?.trim() : current.notes,
+      type: type ?? current.type,
+      scheduledAt: body.scheduledAt ?? current.scheduledAt,
+      notes: body.notes !== undefined ? body.notes.trim() : current.notes,
       updatedAt: new Date().toISOString(),
     };
-
-    if (
-      scheduledAt >= new Date().toISOString() &&
-      hasValidAppointmentOfType(
-        section.appointments,
-        current.userId,
-        resolvedType,
-        id,
-      )
-    ) {
-      return { conflict: resolvedType };
-    }
 
     section.appointments[index] = updated;
     return updated;
   });
 
-  if (
-    appointment &&
-    typeof appointment === "object" &&
-    "conflict" in appointment
-  ) {
-    return c.json(
-      {
-        error: `User already has an active ${appointment.conflict} appointment`,
-      },
-      409,
-    );
-  }
-  if (!appointment) return notFound(c);
+  if (!appointment) return appointmentErrors.noActiveForUser(c, userId);
   return c.json(appointment);
+});
+
+appointmentRoutes.get("/appointments/user/:userId", async (c) => {
+  const userId = c.req.param("userId");
+  const store = await readStore();
+  const appointment = findValidAppointmentForUser(
+    store.automobile.appointments ?? [],
+    userId,
+  );
+  if (!appointment) return appointmentErrors.noActiveForUser(c, userId);
+  return c.json(appointment);
+});
+
+appointmentRoutes.delete("/appointments/user/:userId", async (c) => {
+  const userId = c.req.param("userId");
+
+  const removed = await withStore((store) => {
+    const section = store.automobile;
+    section.appointments ??= [];
+    const current = findValidAppointmentForUser(section.appointments, userId);
+    if (!current) return false;
+
+    const index = section.appointments.findIndex((a) => a.id === current.id);
+    section.appointments.splice(index, 1);
+    return true;
+  });
+
+  if (!removed) return appointmentErrors.noActiveForUser(c, userId);
+  return c.body(null, 204);
 });
 
 appointmentRoutes.delete("/appointments/:id", async (c) => {
@@ -190,7 +221,7 @@ appointmentRoutes.delete("/appointments/:id", async (c) => {
     return true;
   });
 
-  if (!removed) return notFound(c);
+  if (!removed) return appointmentErrors.notFoundById(c, id);
   return c.body(null, 204);
 });
 
@@ -200,10 +231,9 @@ appointmentRoutes.get("/appointments", async (c) => {
 });
 
 appointmentRoutes.get("/appointments/:id", async (c) => {
+  const id = c.req.param("id");
   const store = await readStore();
-  const appointment = store.automobile.appointments?.find(
-    (a) => a.id === c.req.param("id"),
-  );
-  if (!appointment) return notFound(c);
+  const appointment = store.automobile.appointments?.find((a) => a.id === id);
+  if (!appointment) return appointmentErrors.notFoundById(c, id);
   return c.json(appointment);
 });

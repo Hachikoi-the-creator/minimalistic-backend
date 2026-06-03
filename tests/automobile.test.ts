@@ -4,6 +4,7 @@ import type { Appointment, User } from "../lib/types.js";
 import {
   futureScheduledAt,
   jsonRequest,
+  parseApiError,
   parseJson,
   pastScheduledAt,
   setupTestStore,
@@ -59,9 +60,9 @@ describe("automobile users", () => {
     });
 
     expect(res.status).toBe(400);
-    expect((await parseJson<{ error: string }>(res)).error).toBe(
-      "name and phone are required",
-    );
+    const err = await parseApiError(res);
+    expect(err.code).toBe("USER_MISSING_PHONE");
+    expect(err.error).toContain("phone");
   });
 
   it("rejects create with phone that has no digits", async () => {
@@ -71,9 +72,8 @@ describe("automobile users", () => {
     });
 
     expect(res.status).toBe(400);
-    expect((await parseJson<{ error: string }>(res)).error).toBe(
-      "phone must contain digits",
-    );
+    const err = await parseApiError(res);
+    expect(err.code).toBe("USER_INVALID_PHONE");
   });
 
   it("rejects duplicate phone in automobile", async () => {
@@ -81,9 +81,9 @@ describe("automobile users", () => {
     const { res } = await createUser({ name: "Other", phone: "555-000-2000" });
 
     expect(res.status).toBe(409);
-    expect((await parseJson<{ error: string }>(res)).error).toBe(
-      "Phone already in use",
-    );
+    const err = await parseApiError(res);
+    expect(err.code).toBe("USER_PHONE_TAKEN");
+    expect(err.error).toContain("already registered");
   });
 
   it("rejects duplicate phone across prefixes", async () => {
@@ -166,6 +166,23 @@ describe("automobile users", () => {
   it("returns 404 for unknown user id", async () => {
     const res = await app.request(`${base}/users/unknown-id`);
     expect(res.status).toBe(404);
+    const err = await parseApiError(res);
+    expect(err.code).toBe("USER_NOT_FOUND");
+    expect(err.error).toContain("unknown-id");
+  });
+
+  it("rejects deactivating an already inactive user", async () => {
+    const { user } = await createUser({ phone: "5550006500" });
+    await jsonRequest(app, `${base}/users/${user!.id}/deactivate`, {
+      method: "POST",
+    });
+
+    const res = await jsonRequest(app, `${base}/users/${user!.id}/deactivate`, {
+      method: "POST",
+    });
+    expect(res.status).toBe(400);
+    const err = await parseApiError(res);
+    expect(err.code).toBe("USER_ALREADY_INACTIVE");
   });
 });
 
@@ -232,32 +249,37 @@ describe("automobile appointments", () => {
     });
 
     expect(res.status).toBe(400);
-    expect((await parseJson<{ error: string }>(res)).error).toBe(
-      "scheduledAt must be in the future",
-    );
+    const err = await parseApiError(res);
+    expect(err.code).toBe("APPOINTMENT_SCHEDULED_AT_PAST");
   });
 
-  it("rejects appointment for unknown or inactive user", async () => {
-    const unknown = await createAppointment({
+  it("rejects appointment for unknown user", async () => {
+    const { res } = await createAppointment({
       phone: "5551006000",
       type: "service",
       scheduledAt: futureScheduledAt(),
       notes: "Nobody",
     });
-    expect(unknown.res.status).toBe(400);
+    expect(res.status).toBe(400);
+    const err = await parseApiError(res);
+    expect(err.code).toBe("APPOINTMENT_USER_NOT_FOUND");
+  });
 
+  it("rejects appointment for inactive user", async () => {
     const { user } = await createUser({ phone: "5551007000" });
     await jsonRequest(app, `${base}/users/${user!.id}/deactivate`, {
       method: "POST",
     });
 
-    const inactive = await createAppointment({
+    const { res } = await createAppointment({
       phone: "5551007000",
       type: "service",
       scheduledAt: futureScheduledAt(),
       notes: "Inactive",
     });
-    expect(inactive.res.status).toBe(400);
+    expect(res.status).toBe(400);
+    const err = await parseApiError(res);
+    expect(err.code).toBe("APPOINTMENT_USER_INACTIVE");
   });
 
   it("rejects userId and phone mismatch", async () => {
@@ -271,77 +293,36 @@ describe("automobile appointments", () => {
     });
 
     expect(res.status).toBe(400);
-    expect((await parseJson<{ error: string }>(res)).error).toBe(
-      "userId does not match phone",
-    );
+    const err = await parseApiError(res);
+    expect(err.code).toBe("APPOINTMENT_USER_ID_PHONE_MISMATCH");
   });
 
-  it("allows one service and one sale per user but not duplicates", async () => {
+  it("allows only one active appointment per user", async () => {
     const { user } = await createUser({ phone: "5551009000" });
     const scheduledAt = futureScheduledAt();
 
-    const service = await createAppointment({
+    const first = await createAppointment({
       userId: user!.id,
       type: "service",
       scheduledAt,
-      notes: "Service 1",
+      notes: "First",
     });
-    expect(service.res.status).toBe(201);
+    expect(first.res.status).toBe(201);
 
-    const sale = await createAppointment({
-      phone: "5551009000",
+    const second = await createAppointment({
+      userId: user!.id,
       type: "sale",
       scheduledAt,
-      notes: "Sale 1",
+      notes: "Second",
     });
-    expect(sale.res.status).toBe(201);
-
-    const duplicate = await createAppointment({
-      userId: user!.id,
-      type: "service",
-      scheduledAt,
-      notes: "Service 2",
-    });
-    expect(duplicate.res.status).toBe(409);
-    expect((await parseJson<{ error: string }>(duplicate.res)).error).toBe(
-      "User already has an active service appointment",
-    );
+    expect(second.res.status).toBe(409);
+    const err = await parseApiError(second.res);
+    expect(err.code).toBe("APPOINTMENT_ACTIVE_OTHER_TYPE");
+    expect(err.error).toContain("active service");
   });
 
-  it("updates and deletes an appointment", async () => {
-    const { user } = await createUser({ phone: "5551010000" });
-    const { appointment } = await createAppointment({
-      userId: user!.id,
-      type: "service",
-      scheduledAt: futureScheduledAt(),
-      notes: "Original",
-    });
-
-    const patchRes = await jsonRequest(
-      app,
-      `${base}/appointments/${appointment!.id}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({ notes: "Updated notes" }),
-      },
-    );
-    expect(patchRes.status).toBe(200);
-    expect((await parseJson<Appointment>(patchRes)).notes).toBe("Updated notes");
-
-    const deleteRes = await app.request(
-      `${base}/appointments/${appointment!.id}`,
-      { method: "DELETE" },
-    );
-    expect(deleteRes.status).toBe(204);
-
-    const getRes = await app.request(
-      `${base}/appointments/${appointment!.id}`,
-    );
-    expect(getRes.status).toBe(404);
-  });
-
-  it("rejects patch that conflicts with another active appointment", async () => {
-    const { user } = await createUser({ phone: "5551011000" });
+  it("rejects duplicate appointment of the same type", async () => {
+    const { user } = await createUser({ phone: "5551009500" });
     const scheduledAt = futureScheduledAt();
 
     await createAppointment({
@@ -350,19 +331,88 @@ describe("automobile appointments", () => {
       scheduledAt,
       notes: "Service",
     });
-    const { appointment: sale } = await createAppointment({
+
+    const duplicate = await createAppointment({
       userId: user!.id,
-      type: "sale",
+      type: "service",
       scheduledAt,
-      notes: "Sale",
+      notes: "Another service",
+    });
+    expect(duplicate.res.status).toBe(409);
+    const err = await parseApiError(duplicate.res);
+    expect(err.code).toBe("APPOINTMENT_ACTIVE_SAME_TYPE");
+    expect(err.error).toContain("active service");
+  });
+
+  it("updates appointment by user id", async () => {
+    const { user } = await createUser({ phone: "5551010000" });
+    await createAppointment({
+      userId: user!.id,
+      type: "service",
+      scheduledAt: futureScheduledAt(),
+      notes: "Original",
     });
 
-    const res = await jsonRequest(app, `${base}/appointments/${sale!.id}`, {
+    const patchRes = await jsonRequest(
+      app,
+      `${base}/appointments/user/${user!.id}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ notes: "Updated notes", type: "sale" }),
+      },
+    );
+    expect(patchRes.status).toBe(200);
+    const updated = await parseJson<Appointment>(patchRes);
+    expect(updated.notes).toBe("Updated notes");
+    expect(updated.type).toBe("sale");
+  });
+
+  it("returns 404 when patching user without active appointment", async () => {
+    const { user } = await createUser({ phone: "5551010500" });
+    const res = await jsonRequest(app, `${base}/appointments/user/${user!.id}`, {
       method: "PATCH",
-      body: JSON.stringify({ type: "service" }),
+      body: JSON.stringify({ notes: "Nothing to update" }),
+    });
+    expect(res.status).toBe(404);
+    const err = await parseApiError(res);
+    expect(err.code).toBe("APPOINTMENT_NO_ACTIVE_FOR_USER");
+  });
+
+  it("gets and deletes active appointment by user id", async () => {
+    const { user } = await createUser({ phone: "5551011000" });
+    const { appointment } = await createAppointment({
+      userId: user!.id,
+      type: "service",
+      scheduledAt: futureScheduledAt(),
+      notes: "To delete",
     });
 
-    expect(res.status).toBe(409);
+    const getByUserRes = await app.request(
+      `${base}/appointments/user/${user!.id}`,
+    );
+    expect(getByUserRes.status).toBe(200);
+    expect((await parseJson<Appointment>(getByUserRes)).id).toBe(
+      appointment!.id,
+    );
+
+    const deleteRes = await app.request(
+      `${base}/appointments/user/${user!.id}`,
+      { method: "DELETE" },
+    );
+    expect(deleteRes.status).toBe(204);
+
+    const getAfterDelete = await app.request(
+      `${base}/appointments/user/${user!.id}`,
+    );
+    expect(getAfterDelete.status).toBe(404);
+  });
+
+  it("returns 404 when deleting user without active appointment", async () => {
+    const { user } = await createUser({ phone: "5551011500" });
+    const res = await app.request(`${base}/appointments/user/${user!.id}`, {
+      method: "DELETE",
+    });
+    expect(res.status).toBe(404);
   });
 
   it("lists and gets appointment by id", async () => {

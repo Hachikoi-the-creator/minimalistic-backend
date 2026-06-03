@@ -25,6 +25,12 @@ export const isPhoneTaken = (
 export const isValidAppointment = (appointment: Appointment): boolean =>
   appointment.scheduledAt >= new Date().toISOString();
 
+export const findValidAppointmentForUser = (
+  appointments: Appointment[],
+  userId: string,
+): Appointment | undefined =>
+  appointments.find((a) => a.userId === userId && isValidAppointment(a));
+
 export const hasValidAppointmentOfType = (
   appointments: Appointment[],
   userId: string,
@@ -38,3 +44,17 @@ export const hasValidAppointmentOfType = (
       a.id !== excludeId &&
       isValidAppointment(a),
   );
+
+export const getActiveAppointmentBlock = (
+  appointments: Appointment[],
+  userId: string,
+  type: AppointmentType,
+): "same-type" | "other-type" | undefined => {
+  if (hasValidAppointmentOfType(appointments, userId, type)) {
+    return "same-type";
+  }
+  if (findValidAppointmentForUser(appointments, userId)) {
+    return "other-type";
+  }
+  return undefined;
+};

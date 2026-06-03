@@ -44,3 +44,8 @@ export const jsonRequest = (
 
 export const parseJson = async <T>(response: Response): Promise<T> =>
   response.json() as Promise<T>;
+
+export type ApiErrorBody = { error: string; code: string };
+
+export const parseApiError = async (response: Response) =>
+  parseJson<ApiErrorBody>(response);

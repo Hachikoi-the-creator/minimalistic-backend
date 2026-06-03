@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { userErrors } from "../lib/errors.js";
 import { isPhoneTaken, normalizePhone } from "../lib/guards.js";
 import { readStore, withStore } from "../lib/store.js";
 import type {
@@ -8,14 +9,6 @@ import type {
   User,
 } from "../lib/types.js";
 
-const notFound = (c: { json: (body: unknown, status: number) => Response }) =>
-  c.json({ error: "Not found" }, 404);
-
-const badRequest = (
-  c: { json: (body: unknown, status: number) => Response },
-  message: string,
-) => c.json({ error: message }, 400);
-
 export const createUserRoutes = (
   prefix: Prefix,
   options: { allowDeactivate?: boolean } = {},
@@ -24,12 +17,14 @@ export const createUserRoutes = (
 
   app.post("/users", async (c) => {
     const body = (await c.req.json()) as CreateUserBody;
-    if (!body.name?.trim() || !body.phone?.trim()) {
-      return badRequest(c, "name and phone are required");
+    if (!body.name?.trim() && !body.phone?.trim()) {
+      return userErrors.missingCreateFields(c);
     }
+    if (!body.name?.trim()) return userErrors.missingName(c);
+    if (!body.phone?.trim()) return userErrors.missingPhone(c);
 
     const phone = normalizePhone(body.phone);
-    if (!phone) return badRequest(c, "phone must contain digits");
+    if (!phone) return userErrors.invalidPhone(c);
 
     const user = await withStore((store) => {
       const section = store[prefix];
@@ -49,7 +44,7 @@ export const createUserRoutes = (
       return created;
     });
 
-    if (!user) return c.json({ error: "Phone already in use" }, 409);
+    if (!user) return userErrors.phoneTaken(c);
     return c.json(user, 201);
   });
 
@@ -86,11 +81,9 @@ export const createUserRoutes = (
       return updated;
     });
 
-    if (user === "invalid-phone") {
-      return badRequest(c, "phone must contain digits");
-    }
-    if (user === null) return c.json({ error: "Phone already in use" }, 409);
-    if (!user) return notFound(c);
+    if (user === "invalid-phone") return userErrors.invalidPhone(c);
+    if (user === null) return userErrors.phoneTaken(c);
+    if (!user) return userErrors.notFound(c, prefix, id);
     return c.json(user);
   });
 
@@ -103,8 +96,11 @@ export const createUserRoutes = (
         const index = section.users.findIndex((u) => u.id === id);
         if (index === -1) return undefined;
 
+        const current = section.users[index];
+        if (!current.active) return "already-inactive";
+
         const updated: User = {
-          ...section.users[index],
+          ...current,
           active: false,
           updatedAt: new Date().toISOString(),
         };
@@ -112,7 +108,10 @@ export const createUserRoutes = (
         return updated;
       });
 
-      if (!user) return notFound(c);
+      if (user === "already-inactive") {
+        return userErrors.alreadyInactive(c, prefix, id);
+      }
+      if (!user) return userErrors.notFound(c, prefix, id);
       return c.json(user);
     });
   }
@@ -124,23 +123,22 @@ export const createUserRoutes = (
 
   app.get("/users/search", async (c) => {
     const raw = c.req.query("phone");
-    if (!raw?.trim()) {
-      return badRequest(c, "phone query parameter is required");
-    }
+    if (!raw?.trim()) return userErrors.searchPhoneRequired(c);
 
     const phone = normalizePhone(raw);
-    if (!phone) return badRequest(c, "phone must contain digits");
+    if (!phone) return userErrors.invalidPhone(c);
 
     const store = await readStore();
     const user = store[prefix].users.find((u) => u.phone === phone);
-    if (!user) return notFound(c);
+    if (!user) return userErrors.searchNotFound(c, prefix, phone);
     return c.json(user);
   });
 
   app.get("/users/:id", async (c) => {
+    const id = c.req.param("id");
     const store = await readStore();
-    const user = store[prefix].users.find((u) => u.id === c.req.param("id"));
-    if (!user) return notFound(c);
+    const user = store[prefix].users.find((u) => u.id === id);
+    if (!user) return userErrors.notFound(c, prefix, id);
     return c.json(user);
   });
 

@@ -10,6 +10,6 @@
     "rootDir": ".",
     "noEmit": false
   },
-  "include": ["index.ts", "lib/**/*.ts", "routes/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["index.ts", "app.ts", "lib/**/*.ts", "routes/**/*.ts"],
+  "exclude": ["node_modules", "dist", "tests"]
 }
